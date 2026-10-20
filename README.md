@@ -30,7 +30,7 @@ Around that storage:
 - `chia/full_node/db/rocks.py` is the RocksDB backend, including the writer and the grouped readers.
 - `coin_store.py`, `block_store.py`, and `hint_store.py` are the RocksDB versions of the three stores the full node already had.
 - `chain_db.py` is the small transaction layer: a read sees its own uncommitted writes, and a write commits as one batch.
-- `migrate.py` copies one network's SQLite v2 database into a new `.rocksdb` directory. The SQLite file is only read. The copy needs free space of about 1.5 times the SQLite file on the destination, and some free space on the source disk because the copy holds a read view open.
+- `migrate.py` copies one network's SQLite v2 database into a new `.rocksdb` directory. The SQLite file is only read. While the copy runs, the destination needs free space of about 1.5 times that file, and the source disk needs some free space too, because the copy holds a read view open. The 1.5× is temporary. When the copy finishes, the tool packs the new files. Most column families are stored with LZ4, block bodies keep the compression they already had, and the old parent-coin index is not written. On the farming database that index had been about 25 GB. The finished directory is smaller than both the reserved space and the SQLite file it was copied from. That smaller layout is the one that has been running on mainnet. After the new directory is in use, the old SQLite file can be removed.
 - `file_chip.py` can pack old table files so the directory does not keep a huge pile of small files. That packing was not part of the sync timed below.
 - `chia db migrate` can run the copy while a node is still on SQLite. The node logs that hint when it opens a SQLite database.
 
