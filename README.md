@@ -1,75 +1,65 @@
-# chia-blockchain
+# oabs-rocksdb
 
-[![Chia Network logo][logo-chia]][link-chia]
+Proof of concept: a Chia full node that keeps its blockchain database in RocksDB instead of SQLite.
 
-| Releases                                                                                                                                        | Repo Stats                                                                                                                                                                                                           | Socials                                                                                                                                                                                   |
-| ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [![Latest Release][badge-release]][link-latest] <br /> [![Latest RC][badge-rc]][link-release] <br /> [![Latest Beta][badge-beta]][link-release] | [![Coverage][badge-coverage]][link-coverage] <br /> [![Downloads][badge-downloads]][link-downloads] <br /> [![Commits][badge-commits]][link-commits] <br /> [![Contributors][badge-contributors]][link-contributors] | [![Discord][badge-discord]][link-discord] <br /> [![YouTube][badge-youtube]][link-youtube] <br /> [![Reddit][badge-reddit]][link-reddit] <br /> [![Twitter][badge-twitter]][link-twitter] |
+A stock full node stores blocks, coins, and hints in a SQLite file. This tree adds a second engine for that same local database. Coins, blocks, and hints live in one RocksDB directory, split into column families, with a copy tool that reads an existing SQLite database and writes the RocksDB one. The rest of the tree is Chia Network's code from [chia-blockchain](https://github.com/Chia-Network/chia-blockchain). This repository exists so the experiment is easy to find. It is not a Chia release, and it was not opened as a pull request.
 
-Chia is a modern cryptocurrency built from scratch, designed to be efficient, decentralized, and secure. Here are some of the features and benefits:
+## Do not use this on mainnet
 
-- [Proof of space and time][link-consensus] based consensus which allows anyone to farm with commodity hardware
-- Very easy to use full node and farmer GUI and cli (thousands of nodes active on mainnet)
-- [Chia seeder][link-seeder], which maintains a list of reliable nodes within the Chia network via a built-in DNS server.
-- Simplified UTXO based transaction model, with small on-chain state
-- Lisp-style Turing-complete functional [programming language][link-chialisp] for money related use cases
-- BLS keys and aggregate signatures (only one signature per block)
-- [Pooling protocol][link-pool] that allows farmers to have control of making blocks
-- Support for light clients with fast, objective syncing
-- A growing community of farmers and developers around the world
+Do not point a farming node at this tree, and do not replace a live mainnet database with it.
 
-Please check out the [Chia website][link-chia], the [Intro to Chia][link-intro], and [FAQ][link-faq] for information on this project.
+- The database format is `rocksdb-v1`. A stock Chia node does not open it. A mistake here is a private database the rest of the network will not help you rebuild.
+- Chia has not reviewed it. The consensus rules are meant to stay the same, because this is local storage, but that claim has not been accepted by the project.
+- Several lookups that SQLite serves on separate reader connections still share the one RocksDB writer. A busy wallet or peer can wait behind a block save in ways the stock node does not.
+- The measured sync below did not include the later file-packing code that is in this tree. The two runs also did not have the same number of peers.
 
-Python 3.10+ is required. Make sure your default python version is >=3.10 by typing `python3`.
+Use it to read the approach and the timings. Keep a real node on the database its release shipped.
 
-If you are behind a NAT, it can be difficult for peers outside your subnet to reach you when they start up. You can enable [UPnP][link-upnp]
-on your router or add a NAT (for IPv4 but not IPv6) and firewall rules to allow TCP port 8444 access to your peer.
-These methods tend to be router make/model specific.
+## What changed
 
-Most users should only install harvesters, farmers, plotter, full nodes, and wallets.
-Setting up a seeder is best left to more advanced users.
-Building Timelords and VDFs is for sophisticated users, in most environments.
-Chia Network and additional volunteers are running sufficient Timelords for consensus.
+The full node chooses a database at startup. A normal path ending in `.rocksdb` opens RocksDB. The old SQLite path is still there, including for tests whose files are not RocksDB databases.
 
-## Installing
+RocksDB is organized as column families in `chia/full_node/db/keys.py`:
 
-Install instructions are available in the [Installation Details][link-install] section of the [Chia Docs][link-docs].
+- coins, and indexes by confirmed height, spent height, and puzzle hash
+- the per-height coin journal, used to undo a reorg
+- a short index of fast-forward singletons
+- full block blobs, block records, and the height-to-hash list
+- the main-chain marker, sub-epoch summaries, and blocks that are not yet compact
+- hints, indexed both by coin and by hint
 
-## Running
+Around that storage:
 
-Once installed, an [Intro to Chia][link-intro] guide is available in the [Chia Docs][link-docs].
+- `chia/full_node/db/rocks.py` is the RocksDB backend, including the writer and the grouped readers.
+- `coin_store.py`, `block_store.py`, and `hint_store.py` are the RocksDB versions of the three stores the full node already had.
+- `chain_db.py` is the small transaction layer: a read sees its own uncommitted writes, and a write commits as one batch.
+- `migrate.py` copies one network's SQLite v2 database into a new `.rocksdb` directory. The SQLite file is only read. The copy needs free space of about 1.5 times the SQLite file on the destination, and some free space on the source disk because the copy holds a read view open.
+- `file_chip.py` can pack old table files so the directory does not keep a huge pile of small files. That packing was not part of the sync timed below.
+- `chia db migrate` can run the copy while a node is still on SQLite. The node logs that hint when it opens a SQLite database.
 
-[badge-beta]: https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.chia.net%2Flatest%2Fbadge-data-beta.json&query=%24.message&logo=chianetwork&logoColor=black&label=Latest%20Beta&labelColor=%23e9fbbc&color=%231e2b2e
-[badge-beta2]: https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.chia.net%2Flatest%2Fbadge-data-beta.json&query=%24.message&logo=chianetwork&logoColor=%23e9fbbc&label=Latest%20Beta&labelColor=%23474748&color=%231e2b2e&link=https%3A%2F%2Fgithub.com%2FChia-Network%2Fchia-blockchain%2Freleases&link=https%3A%2F%2Fgithub.com%2FChia-Network%2Fchia-blockchain%2Freleases
-[badge-commits]: https://img.shields.io/github/commit-activity/w/Chia-Network/chia-blockchain?logo=GitHub
-[badge-contributors]: https://img.shields.io/github/contributors/Chia-Network/chia-blockchain?logo=GitHub
-[badge-coverage]: https://img.shields.io/coverallsCoverage/github/Chia-Network/chia-blockchain?logo=Coveralls&logoColor=red&labelColor=%23212F39
-[badge-discord]: https://img.shields.io/badge/discord-Chia%20Network-green.svg
-[badge-discord2]: https://img.shields.io/discord/1034523881404370984.svg?label=Discord&logo=discord&colorB=1e2b2f
-[badge-downloads]: https://img.shields.io/github/downloads/Chia-Network/chia-blockchain/total?logo=GitHub
-[badge-rc]: https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.chia.net%2Flatest%2Fbadge-data-rc.json&query=%24.message&logo=chianetwork&logoColor=white&label=Latest%20RC&labelColor=%230d3349&color=%23474748
-[badge-reddit]: https://img.shields.io/reddit/subreddit-subscribers/chia?style=flat-square&logo=reddit&labelColor=%230b1416&color=%23222222
-[badge-release]: https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.chia.net%2Flatest%2Fbadge-data.json&query=%24.message&logo=chianetwork&label=Latest%20Release&labelColor=%231e2b2e&color=%230d3349
-[badge-twitter]: https://img.shields.io/twitter/follow/chia_project?style=flat-square&logo=x.org&logoColor=white&labelColor=black
-[badge-youtube]: https://img.shields.io/youtube/channel/subscribers/UChFkJ3OAUvnHZdiQISWdWPA?style=flat-square&logo=youtube&logoColor=%23ff0000&labelColor=%230f0f0f&color=%23272727
-[link-chia]: https://www.chia.net/
-[link-chialisp]: https://chialisp.com/
-[link-commits]: https://github.com/Chia-Network/chia-blockchain/commits/main/
-[link-consensus]: https://docs.chia.net/consensus-intro/
-[link-contributors]: https://github.com/Chia-Network/chia-blockchain/graphs/contributors
-[link-coverage]: https://coveralls.io/github/Chia-Network/chia-blockchain
-[link-discord]: https://discord.gg/chia
-[link-docs]: https://docs.chia.net/docs-home/
-[link-downloads]: https://www.chia.net/downloads/
-[link-faq]: https://docs.chia.net/faq/
-[link-install]: https://docs.chia.net/installation/
-[link-intro]: https://docs.chia.net/introduction/
-[link-latest]: https://github.com/Chia-Network/chia-blockchain/releases/latest
-[link-pool]: https://docs.chia.net/pool-farming/
-[link-reddit]: https://www.reddit.com/r/chia/
-[link-release]: https://github.com/Chia-Network/chia-blockchain/releases
-[link-seeder]: https://docs.chia.net/guides/seeder-user-guide/
-[link-twitter]: https://twitter.com/chia_project
-[link-upnp]: https://www.homenethowto.com/ports-and-nat/upnp-automatic-port-forward/
-[link-youtube]: https://www.youtube.com/chianetwork
-[logo-chia]: https://www.chia.net/wp-content/uploads/2022/09/chia-logo.svg "Chia logo"
+Tests for the stores, the migration, readers, and reorgs are under `chia/_tests/core/full_node/db/` and `chia/_tests/blockchain/`. `benchmarks/full_block_coins.py` is a local timing tool for one block of coin changes. It is not the source of the sync numbers below.
+
+## What the sync measured
+
+Two full syncs of the same heights, on one Windows PC, from the start of the chain through height 9,359,052. The RocksDB node is the code in this tree. The other node is the SQLite full node built as 2.7.4rc3.dev67. That SQLite build writes fewer records than release 2.7.4, so its rates are the easier of the two SQLite pictures. The coin journal for these heights holds 607,795,346 additions and 170,762,825 removals.
+
+The RocksDB sync reached that height in 34 hours 31 minutes, at 75.3 blocks per second. The SQLite sync took 60 hours 49 minutes, at 42.7 blocks per second. That is about 76 percent faster over the whole range. Peer counts were not matched: at the end of the run the RocksDB node had about 20 peers and the SQLite node about 10. Treat the gap as what these two syncs did, not as a lab test of the database alone.
+
+| Heights | Coins added | Coins removed | RocksDB blocks/s | SQLite blocks/s | Difference |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 0–9,359,052 | 607,795,346 | 170,762,825 | 75.3 | 42.7 | RocksDB 76% faster |
+| 1,550,000–2,000,000 | 156,174,001 | 9,728,997 | 58.8 | 18.6 | RocksDB 215% faster |
+| 4,650,000–5,099,999 | 75,035,557 | 54,080,083 | 50.0 | 20.7 | RocksDB 141% faster |
+| 9,200,000–9,359,052 | 170,569,285 | 1,324,603 | 19.2 | 4.0 | RocksDB 377% faster |
+
+The last row is the sustained full-block stretch. On the RocksDB side, the median database write across the finished 50,000-block slices there was 0.64 seconds, then 0.72, then 0.78. Adding the block took 1.34 seconds, then 1.47, then 1.60. The node was not waiting on peers in that stretch.
+
+RocksDB was not faster on every slice. On heights 0–49,999, SQLite did 79.5 blocks per second and RocksDB did 75.5, about 5 percent the other way. Empty early blocks are cheap for both. The large gaps show up where the coin table is busy.
+
+## Where to look
+
+- `chia/full_node/db/` holds the RocksDB engine, the three stores, migration, and file packing.
+- `chia/full_node/full_node.py` is where startup opens either SQLite or RocksDB.
+- `chia/cmds/` contains the `chia db migrate` command.
+
+Upstream install and run instructions for the official node are in the [Chia docs](https://docs.chia.net/) and the [chia-blockchain](https://github.com/Chia-Network/chia-blockchain) repository. The Apache 2.0 license in `LICENSE` still covers the upstream code.
